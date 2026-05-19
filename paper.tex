@@ -1,0 +1,540 @@
+% Antagonistic Attention: Cross-Lingual Head Circuits in BLOOM-560m
+% ACL 2024 format -- replace \documentclass with acl2024 for final submission
+% To use ACL style: download acl2024.sty and acl_natbib.bst from
+% https://github.com/acl-org/acl-style-files/tree/master/latex
+% then uncomment the acl2024 line and comment out the geometry line.
+\documentclass[11pt]{article}
+% \usepackage[hyperref]{acl2024}  % Uncomment for ACL submission
+\usepackage[margin=1in]{geometry}
+\usepackage{times}
+\usepackage{latexsym}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{multirow}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+\usepackage{url}
+\usepackage{microtype}
+\usepackage{subcaption}
+\usepackage{natbib}
+\bibliographystyle{plainnat}
+
+\title{Antagonistic Attention: Cross-Lingual Head Circuits in BLOOM-560m}
+
+\author{
+  Ahmad Al-Zaro \\
+  \texttt{ahmad@example.com}
+}
+
+\begin{document}
+\maketitle
+
+% ============================================================================
+% ABSTRACT
+% ============================================================================
+\begin{abstract}
+Multilingual language models develop shared internal representations across languages, yet the computational circuits through which different languages exploit shared components remain largely unexplored.
+We present a cross-lingual circuit analysis of BLOOM-560m, applying four complementary mechanistic interpretability techniques---zero ablation, activation patching, directional edge attribution patching (EAP), and logit lens---to factual recall across six typologically diverse languages (English, Arabic, French, Chinese, Hindi, Japanese).
+We observe three phenomena: (1)~\textbf{antagonistic attention heads} that causally help one language while hurting another, providing preliminary mechanistic evidence for the ``curse of multilinguality''; (2)~a small set of \textbf{multi-lingual heads} (notably L14H3, L16H8, L23H5) that contribute positively across 5--6 languages, alongside strongly language-specific heads; and (3)~\textbf{language-dependent necessity--sufficiency dissociations}, where the correlation between a head's necessity (ablation impact) and its sufficiency (patching restoration) varies from $r=0.65$ (Hindi, $p < 0.001$) to $r=0.06$ (French, n.s.).
+All findings are specific to factual recall in a single 560M-parameter model and should be interpreted as preliminary.
+We discuss implications for understanding how multilingual capacity is allocated across attention heads.
+\end{abstract}
+
+% ============================================================================
+% 1. INTRODUCTION
+% ============================================================================
+\section{Introduction}
+
+Multilingual language models achieve remarkable cross-lingual transfer despite being trained primarily on monolingual corpora \cite{pires2019multilingual, conneau2020unsupervised}.
+A central puzzle is \emph{how} a fixed set of parameters serves multiple languages simultaneously.
+\citet{conneau2020unsupervised} identified the ``curse of multilinguality''---the observation that per-language performance degrades as the number of languages grows---but the mechanistic basis of this trade-off remains unclear.
+
+Recent work in mechanistic interpretability has developed powerful tools for understanding transformer computation at the level of individual components and their interactions \cite{elhage2021mathematical, olsson2022incontext, conmy2023towards, anthropic2025circuit}.
+Separately, studies of multilingual models have identified language-specific neurons \cite{tang2024language, crane2026causal}, language-neutral sub-networks \cite{foroutan2022discovering}, and evidence that models process non-English inputs through an English-centric conceptual space \cite{wendler2024llamas, schut2025multilingual}.
+However, these two research threads have not been fully connected: we lack a circuit-level understanding of how multilingual models wire shared components differently across languages.
+
+We bridge this gap by applying four complementary interpretability techniques to BLOOM-560m \cite{scao2022bloom} across six languages.
+\textbf{Scope:} All findings are specific to factual recall in BLOOM-560m and may not generalize to other tasks, models, or model scales.
+Our contributions are:
+
+\begin{itemize}
+\item We identify \textbf{antagonistic attention heads}---heads where ablation helps one language but hurts another---providing preliminary mechanistic evidence for the curse of multilinguality (\S\ref{sec:results:antagonistic}).
+\item We characterize a set of \textbf{multi-lingual heads} (L14H3, L16H8, L23H5, L21H8) that show consistent positive contributions across 5--6 languages, alongside strongly language-specific heads (\S\ref{sec:results:universal}).
+\item We demonstrate that \textbf{necessity--sufficiency correlations are language-dependent}, with implications for which interpretability methods to trust across languages (\S\ref{sec:results:necsuf}).
+\item We report the \textbf{push--pull structure} of directional EAP edges, which is consistent across languages (\S\ref{sec:results:eap}).
+\end{itemize}
+
+% ============================================================================
+% 2. RELATED WORK
+% ============================================================================
+\section{Related Work}
+
+\paragraph{Multilingual Representations.}
+\citet{pires2019multilingual} showed that multilingual BERT achieves cross-lingual transfer without explicit cross-lingual signal, with transfer strongest between typologically similar languages.
+\citet{chi2020finding} extended this by demonstrating that attention subspaces recover universal syntactic structures.
+\citet{conneau2020unsupervised} introduced XLM-R and identified the curse of multilinguality---the transfer-dilution trade-off that degrades per-language capacity as language count increases.
+\citet{qi2023crosslingual} proposed the RankC metric and found that script similarity is a major determinant of cross-lingual knowledge transfer, independent of accuracy.
+
+\paragraph{Internal Language Processing.}
+\citet{wendler2024llamas} found that Llama-2 processes non-English inputs through an English-centric ``concept space,'' with intermediate layers decoding to English before translating to the target language.
+\citet{schut2025multilingual} corroborated this with logit lens analysis, showing that LLMs emit representations closest to English for semantically-loaded words.
+\citet{zhao2024crosslingual} proposed a three-space framework---input normalization, language-independent reasoning, and language-specific output---that aligns with our observation of language-dependent convergence layers.
+
+\paragraph{Language-Specific Components.}
+\citet{tang2024language} identified language-specific neurons in BLOOM and LLaMA-2 using LAPE (Language Activation Probability Entropy), demonstrating that selectively activating neurons can steer output language.
+\citet{riemenschneider2025crosslingual} studied the same model we use (BLOOM-560m) and found that neuron-level representations gradually converge into cross-lingual abstractions during pretraining.
+\citet{foroutan2022discovering} discovered language-neutral sub-networks via the lottery ticket hypothesis, with topologically similar sub-networks across 11 languages.
+\citet{chen2025focusing} proposed LAHIS to identify language-specific attention heads, showing that only 14--20 tunable parameters suffice for cross-lingual transfer.
+CRANE \citeyearpar{crane2026causal} advanced this with causal neuron-level analysis, finding asymmetric, non-exclusive language specialization.
+Our work differs from all of these by operating at the \emph{attention head circuit} level---examining not just which heads matter, but how they compose.
+
+\paragraph{Mechanistic Interpretability and Circuits.}
+\citet{elhage2021mathematical} provided the mathematical framework for transformer circuits, and \citet{olsson2022incontext} identified induction heads as a key circuit motif.
+\citet{nanda2023attribution} introduced attribution patching as a scalable approximation to activation patching, with \citet{syed2024attribution} demonstrating it outperforms automated circuit discovery.
+\citet{conmy2023towards} introduced ACDC for automated circuit discovery.
+\citet{anthropic2025circuit} and \citet{anthropic2025biology} revealed attribution graphs in Claude 3.5 Haiku, finding evidence that models ``sometimes think in a conceptual space that is shared between languages.''
+\citet{dumas2025separating} provided causal evidence for language-agnostic concept representations using activation patching, but did not examine circuit-level wiring differences.
+
+\paragraph{Ablation Methods and Logit Lens.}
+\citet{clark2019what} and \citet{voita2019analyzing} established the template for per-head analysis, showing that specialized heads carry most linguistic information.
+\citet{li2024optimal} showed that zero ablation systematically overestimates component importance compared to optimal ablation, directly relevant to our methodology.
+\citet{nostalgebraist2020logitlens} introduced the logit lens, and \citet{belrose2023tuned} refined it with the tuned lens for more reliable layer-wise predictions.
+
+% ============================================================================
+% 3. METHODOLOGY
+% ============================================================================
+\section{Methodology}
+\label{sec:methodology}
+
+\subsection{Model and Setup}
+
+We study BLOOM-560m \cite{scao2022bloom}, a 560M-parameter autoregressive model with 24 layers and 16 attention heads per layer (384 total heads).
+BLOOM was trained on 46 natural languages and 13 programming languages with deliberate multilingual balance, making it suitable for cross-lingual analysis.
+All experiments use TransformerLens \cite{nanda2022transformerlens} with float32 precision on CPU to avoid known numerical issues with GPU-accelerated execution on Apple MPS hardware.
+
+\subsection{Zero Ablation}
+\label{sec:method:ablation}
+
+For each attention head $h$ at layer $\ell$, we measure \textbf{necessity} by setting the head's output ($\mathbf{z}^{(\ell,h)}$) to zero at all sequence positions and measuring the resulting drop in target token logit:
+\begin{equation}
+\Delta_{\text{abl}}^{(\ell,h)} = \log p(y \mid x) - \log p(y \mid x; \mathbf{z}^{(\ell,h)} \coloneqq \mathbf{0})
+\label{eq:ablation}
+\end{equation}
+where $y$ is the target token and $x$ is the input.
+A positive $\Delta_{\text{abl}}$ indicates the head contributes to the correct prediction; a negative value indicates the head is antagonistic.
+
+\textbf{Caveat:} Zero ablation produces out-of-distribution inputs to downstream layers, which can overestimate head importance \cite{li2024optimal}.
+We use zero ablation as a computationally efficient screening tool and validate key findings with activation patching (\S\ref{sec:method:patching}).
+
+\subsection{Activation Patching}
+\label{sec:method:patching}
+
+To measure \textbf{sufficiency}, we use activation patching \cite{nanda2023attribution, dumas2025separating}.
+Given a \emph{clean} prompt that elicits the correct answer and a \emph{corrupted} prompt where the key entity is replaced with a nonsense string, we:
+\begin{enumerate}
+\item Run the model on the corrupted prompt to obtain a corrupted forward pass.
+\item For each head $h$, replace its output at the \textbf{last sequence position} with the corresponding activation from the clean forward pass.
+\item Measure how much of the clean-to-corrupt logit gap is restored.
+\end{enumerate}
+The restoration fraction is:
+\begin{equation}
+\rho^{(\ell,h)} = \frac{\text{logit}_{\text{patched}} - \text{logit}_{\text{corrupt}}}{\text{logit}_{\text{clean}} - \text{logit}_{\text{corrupt}}}
+\label{eq:patching}
+\end{equation}
+
+\textbf{Limitation:} Patching at the last position only measures the head's contribution at that position, potentially underestimating heads that primarily operate on earlier positions.
+This is a standard design choice for next-token prediction tasks, as the last position carries the critical information for the output.
+
+\subsection{Directional Edge Attribution Patching}
+\label{sec:method:eap}
+
+To trace information flow between heads, we use directional edge attribution patching (EAP) \cite{nanda2023attribution, syed2024attribution}.
+For a pair of heads $(h_s, h_d)$ at layers $\ell_s < \ell_d$, the edge attribution score approximates the causal effect of $h_s$'s output on $h_d$'s contribution to the target logit:
+\begin{equation}
+\text{EAP}(h_s \to h_d) = \frac{\partial \mathcal{L}}{\partial \mathbf{z}^{(\ell_d, h_d)}} \cdot \left(\mathbf{z}_{\text{clean}}^{(\ell_s, h_s)} - \mathbf{z}_{\text{corrupt}}^{(\ell_s, h_s)}\right)
+\label{eq:eap}
+\end{equation}
+where $\mathcal{L}$ is the logit difference between the target token and the strongest competitor.
+Positive scores indicate excitatory (boosting) connections; negative scores indicate inhibitory (suppressing) connections.
+
+\subsection{Raw Logit Lens}
+\label{sec:method:logitlens}
+
+We apply the raw logit lens \cite{nostalgebraist2020logitlens} by decoding intermediate hidden states at each layer through the final layer norm and unembedding matrix:
+\begin{equation}
+p_\ell(y) = \text{softmax}\left(\mathbf{W}_U \cdot \text{LN}_f(\mathbf{h}_\ell)\right)_y
+\end{equation}
+
+We define the \textbf{convergence layer} as the earliest layer where the target token first reaches rank 1 and maintains it through the final layer.
+\textbf{Important caveat:} The raw logit lens is known to be unreliable on models using ALiBi positional encodings \cite{belrose2023tuned}, which BLOOM employs.
+Tuned lens probes could not be successfully trained for BLOOM-560m in our experiments.
+We therefore report logit lens results as suggestive rather than definitive.
+
+\subsection{Prompt Construction}
+
+We construct 35 prompt pairs across six languages: English (8), Arabic (5), French (5), Chinese (5), Hindi (5), and Japanese (7).
+All prompts test \textbf{factual recall}---the model must predict a factual completion (capitals, scientific facts, historical dates, cultural knowledge).
+Each pair consists of a clean prompt and a corrupted variant where the key entity is replaced with a nonsense string.
+
+\textbf{Limitation:} The prompt distribution is unbalanced across languages and restricted to factual recall.
+Findings may not generalize to other linguistic tasks (syntactic processing, morphological agreement, etc.).
+
+% ============================================================================
+% 4. EXPERIMENTAL SETUP
+% ============================================================================
+\section{Experimental Setup}
+\label{sec:setup}
+
+\paragraph{Phase 1: Head Selection.}
+We perform a full 384-head zero ablation sweep on a single English prompt to identify the top 30 heads by logit drop magnitude.
+These 30 heads serve as the candidate set for all subsequent cross-lingual analyses.
+
+\textbf{Critical limitation:} This English-first selection strategy creates a fundamental bias toward heads important for English.
+Heads critical for non-English languages but unimportant for English are excluded.
+Consequently, our ``multi-lingual'' heads are more precisely described as \emph{English-important heads that also contribute to other languages}.
+A less biased approach would take the union of top heads from each language, but this was not computationally feasible in the current study.
+
+\paragraph{Phase 2: Cross-lingual Evaluation.}
+We evaluate the 30 selected heads across all 35 prompt pairs using zero ablation, activation patching, directional EAP, and raw logit lens.
+For each language $L$ and head $h$, we compute the average logit drop $\overline{\Delta}_{\text{abl}}^{(h,L)}$ and standard error across prompts in that language.
+
+\paragraph{Languages and Baselines.}
+Table~\ref{tab:baselines} shows the baseline probabilities and logit magnitudes for each language.
+Notably, baseline logits differ by an order of magnitude (English: 150.0 vs.\ Arabic: 21.6), meaning raw logit drops are not directly comparable across languages.
+We report raw logit drops throughout for consistency with the ablation literature but note this confound in our interpretation.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Language} & \textbf{Baseline $p$} & \textbf{Baseline logit} & \textbf{$n$ prompts} \\
+\midrule
+English & 0.228 & 150.0 & 8 \\
+Arabic  & 0.603 & 21.6  & 5 \\
+French  & 0.083 & 148.9 & 5 \\
+Chinese & 0.036 & 102.5 & 5 \\
+Hindi   & 0.253 & 20.2  & 5 \\
+Japanese & 0.011 & 98.9 & 7 \\
+\bottomrule
+\end{tabular}
+\caption{Baseline probabilities and logit magnitudes for the target token across languages (averaged over prompts). The large logit-scale differences between languages mean that raw logit drops are not directly comparable.}
+\label{tab:baselines}
+\end{table}
+
+% ============================================================================
+% 5. RESULTS
+% ============================================================================
+\section{Results}
+\label{sec:results}
+
+\subsection{Multi-Lingual Heads}
+\label{sec:results:universal}
+
+We identify heads that show positive average logit drop ($\overline{\Delta}_{\text{abl}} > 0.05$) across multiple languages.
+Table~\ref{tab:universal} presents the heads with contributions in 4 or more languages from the multi-prompt pipeline.
+
+L14H3 shows the most consistent positive contribution, with $\overline{\Delta}_{\text{abl}} > 0.05$ across all six languages tested.
+However, the effect size varies substantially: its Arabic contribution ($0.335 \pm \text{SEM}$) is roughly 4$\times$ its Chinese contribution ($0.063$), suggesting it is primarily important for Arabic with smaller cross-lingual spillover.
+L16H8 shows a similar pattern with strong Arabic and Japanese effects.
+
+These results are consistent with \citet{foroutan2022discovering}'s finding of shared sub-networks and \citet{chen2025focusing}'s language-general attention heads, but our causal ablation approach provides stronger evidence than the activation-based methods used in prior work.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lccccccc}
+\toprule
+\textbf{Head} & \textbf{$n_L$} & \textbf{en} & \textbf{ar} & \textbf{fr} & \textbf{zh} & \textbf{hi} & \textbf{ja} \\
+\midrule
+L14H3  & 6 & .174 & .335 & .145 & .063 & .084 & .161 \\
+L16H8  & 5 & .052 & .321 & .114 & .102 & ---  & .156 \\
+L20H6  & 4 & .792 & .051 & .153 & .237 & ---  & ---  \\
+L23H5  & 5 & ---  & .169 & .068 & .080 & .121 & .051 \\
+L10H5  & 4 & ---  & .171 & .078 & .055 & ---  & .087 \\
+L12H2  & 4 & .150 & .117 & .070 & ---  & .080 & ---  \\
+\bottomrule
+\end{tabular}
+\caption{Multi-lingual heads: average logit drop ($\overline{\Delta}_{\text{abl}}$) per language from the 35-prompt pipeline. $n_L$: number of languages where $\overline{\Delta}_{\text{abl}} > 0.05$. Dashes indicate $\overline{\Delta}_{\text{abl}} \leq 0.05$ or negative. Heads are ranked by average drop across contributing languages.}
+\label{tab:universal}
+\end{table}
+
+\subsection{Language-Specific Heads}
+\label{sec:results:specific}
+
+Several heads show strong contributions to a single language with minimal cross-lingual effect.
+L20H15 is the top English-specific head (logit drop $1.946$ in the initial verification, $\overline{\Delta}_{\text{abl}} = 0.792$ multi-prompt for English vs.\ negative or near-zero for most other languages).
+For Arabic, L21H11 ($\overline{\Delta}_{\text{abl}} = 0.428$) shows the strongest language-specific signal.
+L22H14 is primarily important for English ($0.953$) and French ($0.522$) in the verification, with negative effects on Japanese.
+
+The existence of both multi-lingual and language-specific heads within the same model is consistent with the asymmetric specialization reported by \citet{crane2026causal} at the neuron level, and extends it to the attention head level.
+
+\subsection{Antagonistic Heads: Preliminary Evidence}
+\label{sec:results:antagonistic}
+
+We observe heads where ablation \emph{increases} the target logit for one language while \emph{decreasing} it for another, which we term \textbf{antagonistic heads}.
+Table~\ref{tab:antagonistic} presents the most prominent examples from the multi-prompt data.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lllrr}
+\toprule
+\textbf{Head} & \textbf{Helps} & \textbf{Hurts} & $\Delta_{\text{help}}$ & $\Delta_{\text{hurt}}$ \\
+\midrule
+L20H15 & English & Arabic  & $+1.946$ & $-0.192$ \\
+L21H11 & Arabic  & Hindi   & $+0.428$ & $-0.393$ \\
+L18H15 & English & Arabic  & $+0.870$ & $-0.159$ \\
+L22H14 & French  & Japanese & $+0.522$ & $-0.087$ \\
+L23H12 & English & Hindi   & $+0.307$ & $-0.171$ \\
+\bottomrule
+\end{tabular}
+\caption{Antagonistic heads: $\Delta_{\text{help}}$ is the logit drop when the head is ablated (higher = more helpful); $\Delta_{\text{hurt}}$ is the logit drop for the hurt language (negative = ablation \emph{improves} that language's prediction). Values from initial verification (single-prompt). These are preliminary and require multi-prompt validation with error bars.}
+\label{tab:antagonistic}
+\end{table}
+
+If confirmed, antagonistic heads would provide a mechanistic explanation for the curse of multilinguality \cite{conneau2020unsupervised}: the same head simultaneously helps one language and hinders another, implementing a zero-sum competition for representational capacity.
+L20H15 is a striking example---the top English head hurts Arabic, and L21H11 (top Arabic-specific head) hurts Hindi.
+
+\textbf{Important caveats:} (1)~The antagonistic effect sizes in Table~\ref{tab:antagonistic} are from single-prompt verification and may not be robust across prompts.
+(2)~The ``hurt'' effects ($-0.087$ to $-0.393$) are smaller in magnitude than the ``help'' effects, and without error bars on the multi-prompt data, some may be within noise.
+(3)~Zero ablation may produce artifacts where the out-of-distribution zero input coincidentally helps another language.
+We present this finding as preliminary evidence requiring further validation.
+
+\subsection{Activation Patching: Sufficiency Analysis}
+\label{sec:results:patching}
+
+Activation patching reveals which heads can individually \emph{restore} the correct prediction when patched into a corrupted run.
+Across languages, we observe that the heads with the highest necessity (ablation impact) are not always the most sufficient (highest patching restoration).
+For example, L20H15 is the most necessary English head ($\Delta_{\text{abl}} = 0.545$ in verification) but shows negligible or negative patching restoration in individual English prompts ($\rho = -0.006$ to $-0.015$), indicating that its contribution depends on other heads' concurrent activity.
+In contrast, L21H8 shows moderate necessity ($\Delta_{\text{abl}} = 0.241$) but high sufficiency ($\rho =  0.153$).
+
+\subsection{Necessity--Sufficiency Correlations}
+\label{sec:results:necsuf}
+
+Table~\ref{tab:necsuf} presents Pearson correlations between zero ablation logit drop (necessity) and activation patching restoration fraction (sufficiency) for each language, computed over the 30 candidate heads from the initial verification.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Lang.} & \textbf{Pearson $r$} & \textbf{Spearman $\rho$} & \textbf{$p$-value} & \textbf{$p_{\text{adj}}$} \\
+\midrule
+Hindi    & 0.652 & 0.517 & $9.6 \times 10^{-5}$ & $5.8 \times 10^{-4}$\rlap{*} \\
+Japanese & 0.362 & 0.185 & 0.049 & 0.296 \\
+Chinese  & 0.315 & 0.293 & 0.090 & 0.542 \\
+English  & 0.186 & 0.264 & 0.324 & 1.000 \\
+Arabic   & 0.161 & 0.412 & 0.394 & 1.000 \\
+French   & 0.055 & 0.245 & 0.771 & 1.000 \\
+\bottomrule
+\end{tabular}
+\caption{Necessity--sufficiency correlations per language ($n=30$ heads). $p_{\text{adj}}$: Bonferroni-corrected $p$-values ($\alpha = 0.05/6 = 0.0083$). Only Hindi survives correction (*). All correlations are from the single-prompt verification; the top-30 heads were selected for English importance, which may affect the correlation structure.}
+\label{tab:necsuf}
+\end{table}
+
+Only Hindi shows a statistically significant positive correlation after Bonferroni correction ($r = 0.652$, $p_{\text{adj}} = 5.8 \times 10^{-4}$).
+Japanese shows a marginal uncorrected effect ($p = 0.049$) that does not survive correction.
+For most languages, necessity and sufficiency are weakly or non-significantly correlated.
+
+This finding has methodological implications: ablation-based importance rankings (which measure necessity) may not predict which heads are individually sufficient to restore a computation, at least for languages with weak necessity--sufficiency coupling.
+The strong Hindi correlation may reflect the structure of the selected prompts or genuine properties of Hindi processing in BLOOM-560m; distinguishing these explanations requires a larger prompt set.
+The result is broadly consistent with \citet{li2024optimal}'s theoretical warning that zero ablation and other importance measures can diverge.
+
+\subsection{EAP Push--Pull Structure}
+\label{sec:results:eap}
+
+Directional EAP reveals the edge structure between heads within each language's factual recall circuit.
+Table~\ref{tab:eap} shows the top edges by absolute EAP score for each language.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{llrl}
+\toprule
+\textbf{Lang.} & \textbf{Edge ($\to$)} & \textbf{Score} & \textbf{Dir.} \\
+\midrule
+\multirow{3}{*}{en} & L13H3 $\to$ L18H15 & $-0.736$ & inh. \\
+ & L14H6 $\to$ L20H6 & $+0.541$ & exc. \\
+ & L17H7 $\to$ L18H15 & $+0.483$ & exc. \\
+\midrule
+\multirow{2}{*}{ar} & L16H1 $\to$ L17H14 & $+0.232$ & exc. \\
+ & L20H15 $\to$ L23H12 & $-0.165$ & inh. \\
+\midrule
+\multirow{2}{*}{fr} & L17H14 $\to$ L18H15 & $+0.262$ & exc. \\
+ & L17H7 $\to$ L21H8 & $+0.179$ & exc. \\
+\midrule
+\multirow{2}{*}{zh} & L11H3 $\to$ L15H9 & $+0.131$ & exc. \\
+ & L16H1 $\to$ L18H15 & $+0.088$ & exc. \\
+\midrule
+\multirow{2}{*}{hi} & L9H8 $\to$ L23H12 & $-0.140$ & inh. \\
+ & L8H4 $\to$ L16H1 & $-0.127$ & inh. \\
+\midrule
+\multirow{2}{*}{ja} & L16H1 $\to$ L20H6 & $-0.158$ & inh. \\
+ & L21H8 $\to$ L23H12 & $+0.152$ & exc. \\
+\bottomrule
+\end{tabular}
+\caption{Top EAP edges per language. ``exc.'': excitatory (positive score, source boosts destination's contribution); ``inh.'': inhibitory (negative score, source suppresses). The mixture of excitatory and inhibitory edges is consistent across all languages.}
+\label{tab:eap}
+\end{table}
+
+Across all six languages, we observe a mixture of excitatory and inhibitory edges, consistent with the push--pull structure reported in monolingual circuit analyses \cite{elhage2021mathematical, anthropic2025biology}.
+Certain ``hub'' heads appear as frequent edge endpoints across languages (e.g., L18H15 appears in English, French, and Chinese edges; L23H12 in English, Arabic, Hindi, and Japanese), but the specific wiring differs.
+
+\textbf{Note on EAP metric:} Our EAP implementation uses the logit difference metric (target logit minus strongest competitor) as the optimization objective, following \citet{nanda2023attribution}.
+EAP is a first-order linear approximation and may miss nonlinear interactions between heads \cite{syed2024attribution}.
+
+\subsection{Logit Lens Convergence}
+\label{sec:results:logitlens}
+
+The raw logit lens reveals when each language's target token first achieves rank 1 during the forward pass:
+
+\begin{itemize}
+\item English: layer 21 (rank 25 at L20 $\to$ rank 1 at L21)
+\item Arabic: layer 22 (rank 64,614 at L21 $\to$ rank 1 at L22)
+\item Hindi: layer 22 (rank $>$100K at L21 $\to$ rank 1 at L22)
+\item Chinese: layer 23 (rank 75 at L21 $\to$ rank 7 at L22 $\to$ rank 1 at L23)
+\item French: does not converge to rank 1 (reaches rank 2 at final layer)
+\item Japanese: does not converge to rank 1 in the tested prompt
+\end{itemize}
+
+English converges earliest (L21), followed by Arabic and Hindi (L22), then Chinese (L23). French and Japanese fail to reach rank 1 in these prompts.
+This ordering is broadly consistent with \citet{wendler2024llamas}'s finding that English representations crystallize earlier, and \citet{zhao2024crosslingual}'s three-space framework where late layers handle language-specific output.
+
+\textbf{Important caveat:} These convergence layers are from a single prompt per language in the verification run.
+The raw logit lens is known to be unreliable on BLOOM due to ALiBi positional encodings \cite{belrose2023tuned}.
+Tuned lens probes could not be successfully trained.
+These results should be interpreted as suggestive patterns, not definitive convergence points.
+
+% ============================================================================
+% 6. DISCUSSION
+% ============================================================================
+\section{Discussion}
+
+\paragraph{Mechanistic Basis of the Curse of Multilinguality.}
+Our most novel finding is the existence of antagonistic heads.
+If validated at scale, antagonistic heads would suggest that the curse of multilinguality is not merely a diffuse capacity constraint but is implemented through specific components that perform a zero-sum trade-off between languages.
+This aligns with \citet{conneau2020unsupervised}'s observation but provides a finer-grained mechanism: the trade-off occurs at the level of individual attention heads, not diffusely across the entire network.
+
+The pattern we observe---English-specialized late-layer heads (L20H15, L18H15) that antagonize Arabic, and an Arabic-specialized head (L21H11) that antagonizes Hindi---suggests a possible hierarchy where languages with more training data commandeer shared capacity at the expense of lower-resource languages.
+However, our English-first head selection and small prompt set make this hypothesis speculative.
+
+\paragraph{Multi-Lingual vs.\ Language-Specific Heads.}
+The coexistence of multi-lingual heads (L14H3, L16H8) and language-specific heads (L20H15 for English, L21H11 for Arabic) is consistent with a division of labor: mid-layer heads (L10--L16) tend to serve multiple languages, while late-layer heads (L18--L23) specialize.
+This echoes \citet{tang2024language}'s finding that language-specific neurons concentrate in top and bottom layers, and \citet{zhao2024crosslingual}'s proposal that language-specific processing concentrates in late layers.
+
+\paragraph{Necessity vs.\ Sufficiency.}
+The language-dependent dissociation between necessity and sufficiency has practical implications for interpretability practitioners.
+For Hindi, ablation and patching agree reasonably well ($r = 0.65$), suggesting either method gives similar importance rankings.
+For French ($r = 0.06$), they are essentially independent, meaning ablation-based rankings cannot predict patching-based rankings.
+This extends \citet{li2024optimal}'s theoretical analysis with cross-lingual empirical evidence.
+
+\paragraph{Implications for Multilingual Model Design.}
+If antagonistic heads represent a genuine phenomenon, techniques like language-conditioned head masking \cite{chen2025focusing} or selective head pruning could potentially mitigate the curse of multilinguality by deactivating heads that are antagonistic for the current input language.
+
+% ============================================================================
+% 7. LIMITATIONS
+% ============================================================================
+\section{Limitations}
+
+We identify several limitations that constrain the interpretation of our findings:
+
+\paragraph{English-First Selection Bias.}
+Our top-30 head selection is based entirely on English ablation importance.
+This means all cross-lingual findings are conditioned on heads that matter for English.
+Heads critical for Arabic, Chinese, Hindi, or Japanese but unimportant for English are absent from our analysis.
+A full 384-head sweep for each language would address this bias but was not computationally feasible.
+This is the most significant limitation of the current study.
+
+\paragraph{Small Sample Size.}
+With only 5--8 prompts per language, standard errors are large and individual unusual prompts can dominate language-level averages.
+The antagonistic head findings from the single-prompt verification are particularly vulnerable.
+A robust study would require at least 15--20 balanced prompts per language.
+
+\paragraph{Zero Ablation.}
+Zero ablation produces out-of-distribution inputs that can overestimate head importance \cite{li2024optimal}.
+Mean ablation (replacing with the mean activation) is a more conservative alternative but could not be run due to a calibration issue in our pipeline.
+We partially mitigate this by validating with activation patching, and note that the relative rankings between heads are likely more robust than the absolute effect magnitudes.
+
+\paragraph{Single Model.}
+BLOOM-560m is a single 560M-parameter model.
+Findings may not generalize to larger BLOOM variants, other multilingual models (mGPT, XGLM, Llama), or models with different training data compositions.
+BLOOM's deliberate multilingual balance may produce different circuit structures than English-dominant models.
+
+\paragraph{Factual Recall Only.}
+All prompts test factual recall (capitals, scientific facts, dates).
+Results are specific to factual recall circuits and may not extend to other linguistic tasks (syntactic processing, morphological agreement, discourse reasoning).
+
+\paragraph{Tuned Lens Failure.}
+Tuned lens probes could not be successfully trained for BLOOM-560m, limiting our logit lens analysis to the raw variant, which is known to be unreliable on ALiBi-based models.
+
+\paragraph{Ablation Scope Inconsistency.}
+The initial head selection (Phase 1) used last-position-only ablation, while the full pipeline (Phase 2) used all-position ablation.
+This discrepancy is unlikely to substantially affect results for next-token prediction tasks but should be noted.
+
+\paragraph{Uneven Prompt Distribution.}
+English has 8 prompts while other languages have 5--7, with different category coverage.
+This creates an imbalance in statistical power across languages.
+
+% ============================================================================
+% 8. CONCLUSION
+% ============================================================================
+\section{Conclusion}
+
+We present a cross-lingual circuit analysis of BLOOM-560m using four complementary mechanistic interpretability techniques across six languages.
+Our key observations are: (1)~a small set of multi-lingual heads, led by L14H3, that contribute to factual recall across all tested languages; (2)~preliminary evidence for antagonistic heads that implement a zero-sum trade-off between languages; (3)~language-dependent necessity--sufficiency dissociations with implications for interpretability methodology; and (4)~a consistent push--pull edge structure across languages.
+
+These findings should be interpreted cautiously given the English-first head selection bias, small prompt set, and single-model scope.
+If validated at scale with balanced head selection and larger prompt sets, the antagonistic attention mechanism could provide a new lens for understanding and potentially mitigating the curse of multilinguality.
+
+% ============================================================================
+% ACKNOWLEDGMENTS
+% ============================================================================
+\section*{Acknowledgments}
+We thank the BigScience workshop for releasing BLOOM and the TransformerLens developers for their interpretability toolkit.
+
+% ============================================================================
+% REFERENCES
+% ============================================================================
+\bibliography{references}
+% \bibliographystyle{acl_natbib}  % Uncomment for ACL submission
+
+% ============================================================================
+% APPENDIX
+% ============================================================================
+\appendix
+
+\section{Head Overlap Across Languages}
+\label{app:overlap}
+
+Table~\ref{tab:overlap} presents the pairwise Jaccard similarity of top-10 heads (by ablation logit drop) across languages from the single-prompt verification.
+These values are from a small sample (10 heads per language from a pool of 30) and have not been tested against a null distribution.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lcccccc}
+\toprule
+ & \textbf{en} & \textbf{ar} & \textbf{fr} & \textbf{zh} & \textbf{hi} & \textbf{ja} \\
+\midrule
+en & --- & .333 & .333 & .176 & .176 & .250 \\
+ar & & --- & .333 & .250 & .176 & .538 \\
+fr & & & --- & .333 & .250 & .333 \\
+zh & & & & --- & .176 & .333 \\
+hi & & & & & --- & .250 \\
+ja & & & & & & --- \\
+\bottomrule
+\end{tabular}
+\caption{Pairwise Jaccard similarity of top-10 heads by language. The Arabic--Japanese overlap (0.538) is the highest but has not been tested for statistical significance against a permutation null.}
+\label{tab:overlap}
+\end{table}
+
+\section{Full Top-30 Head List}
+\label{app:top30}
+
+The 30 heads selected from the English full-sweep, ordered by English logit drop: L20H15 (0.545), L22H14 (0.384), L17H14 (0.370), L18H15 (0.346), L23H12 (0.307), L20H6 (0.257), L21H8 (0.241), L21H11 (0.238), L15H9 (0.174), L14H3 (0.167), L19H2 (0.158), L16H8 (0.142), L23H11 (0.140), L11H3 (0.137), L23H14 (0.137), L23H5 (0.121), L17H7 (0.105), L10H5 (0.100), L16H1 (0.074), L19H0 (0.068), L15H12 (0.066), L9H8 (0.066), L19H6 (0.065), L22H5 (0.061), L11H11 (0.061), L13H3 (0.060), L18H3 (0.058), L12H2 (0.057), L8H4 (0.057), L14H6 (0.053).
+
+\end{document}

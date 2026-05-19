@@ -1,0 +1,146 @@
+{
+  "model": "bigscience/bloom-560m",
+  "groups": [
+    "arabic",
+    "english"
+  ],
+  "n_layers": 24,
+  "n_heads": 16,
+  "pairwise_correlations": {
+    "arabic_vs_english": 0.0569
+  },
+  "overlap_jaccard": {
+    "arabic_vs_english": 0.0811
+  },
+  "antagonistic_heads_count": 13,
+  "top_antagonistic": [
+    {
+      "head": "L1H5",
+      "layer": 1,
+      "head_idx": 5,
+      "helped": "arabic",
+      "hurt": "english",
+      "english_drop": 0.044568,
+      "arabic_drop": -0.032626,
+      "magnitude": 0.077194
+    },
+    {
+      "head": "L19H4",
+      "layer": 19,
+      "head_idx": 4,
+      "helped": "arabic",
+      "hurt": "english",
+      "english_drop": 0.024965,
+      "arabic_drop": -0.00646,
+      "magnitude": 0.031425
+    },
+    {
+      "head": "L6H8",
+      "layer": 6,
+      "head_idx": 8,
+      "helped": "arabic",
+      "hurt": "english",
+      "english_drop": 0.020076,
+      "arabic_drop": -0.006538,
+      "magnitude": 0.026614
+    },
+    {
+      "head": "L0H1",
+      "layer": 0,
+      "head_idx": 1,
+      "helped": "english",
+      "hurt": "arabic",
+      "arabic_drop": 0.008409,
+      "english_drop": -0.015628,
+      "magnitude": 0.024037
+    },
+    {
+      "head": "L16H5",
+      "layer": 16,
+      "head_idx": 5,
+      "helped": "arabic",
+      "hurt": "english",
+      "english_drop": 0.008914,
+      "arabic_drop": -0.011769,
+      "magnitude": 0.020684
+    },
+    {
+      "head": "L2H9",
+      "layer": 2,
+      "head_idx": 9,
+      "helped": "english",
+      "hurt": "arabic",
+      "arabic_drop": 0.009241,
+      "english_drop": -0.008894,
+      "magnitude": 0.018134
+    },
+    {
+      "head": "L21H11",
+      "layer": 21,
+      "head_idx": 11,
+      "helped": "english",
+      "hurt": "arabic",
+      "arabic_drop": 0.011581,
+      "english_drop": -0.005821,
+      "magnitude": 0.017402
+    },
+    {
+      "head": "L6H5",
+      "layer": 6,
+      "head_idx": 5,
+      "helped": "arabic",
+      "hurt": "english",
+      "english_drop": 0.005992,
+      "arabic_drop": -0.010651,
+      "magnitude": 0.016642
+    },
+    {
+      "head": "L1H1",
+      "layer": 1,
+      "head_idx": 1,
+      "helped": "english",
+      "hurt": "arabic",
+      "arabic_drop": 0.0104,
+      "english_drop": -0.005865,
+      "magnitude": 0.016265
+    },
+    {
+      "head": "L21H8",
+      "layer": 21,
+      "head_idx": 8,
+      "helped": "english",
+      "hurt": "arabic",
+      "arabic_drop": 0.00948,
+      "english_drop": -0.005001,
+      "magnitude": 0.014481
+    }
+  ],
+  "category_correlations": {
+    "within_group": {
+      "arabic": {
+        "factual_vs_pattern": 0.2407,
+        "factual_vs_religious": -0.0266,
+        "factual_vs_sequence": 0.1194,
+        "pattern_vs_religious": 0.0054,
+        "pattern_vs_sequence": 0.0054,
+        "religious_vs_sequence": 0.0295
+      },
+      "english": {
+        "factual_vs_pattern": 0.1259,
+        "factual_vs_sequence": 0.0085,
+        "pattern_vs_sequence": 0.0676
+      }
+    },
+    "across_group": {
+      "factual": {
+        "arabic_vs_english": -0.1026
+      },
+      "pattern": {
+        "arabic_vs_english": -0.0019
+      },
+      "sequence": {
+        "arabic_vs_english": 0.3517
+      }
+    }
+  }
+}
